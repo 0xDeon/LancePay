@@ -61,7 +61,7 @@ export async function GET(
     : undefined
 
   const stream = await renderToStream(
-    React.createElement(InvoicePDF, { invoice: invoiceData, branding }) as ReactElement<DocumentProps, JSXElementConstructor<DocumentProps>>,
+    React.createElement(InvoicePDF, { invoice: invoiceData, branding }) as unknown as ReactElement<DocumentProps, JSXElementConstructor<DocumentProps>>,
   )
 
   return new NextResponse(stream as unknown as ReadableStream, {
