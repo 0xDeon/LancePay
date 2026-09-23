@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
 import { verifyNigerianBankAccount } from '@/lib/bank-verification'
-import speakeasy from 'speakeasy'
-import { decrypt } from '@/lib/crypto'
+import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { addBankAccountSchema } from '@/lib/validations'
 
 const BANKS: Record<string, string> = {
@@ -63,23 +62,9 @@ export async function POST(request: NextRequest) {
   const rawCode = (body as { code?: unknown } | null)?.code
   const code = typeof rawCode === 'string' || typeof rawCode === 'number' ? String(rawCode) : undefined
 
-  // 2FA Check
-  if (user.twoFactorEnabled) {
-    if (!code) {
-      return NextResponse.json({ error: '2FA code required' }, { status: 401 })
-    }
-    if (user.twoFactorSecret) {
-      const secret = decrypt(user.twoFactorSecret)
-      const verified = speakeasy.totp.verify({
-        secret: secret,
-        encoding: 'base32',
-        token: code,
-        window: 1
-      })
-      if (!verified) {
-        return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
-      }
-    }
+  const twoFactor = verifyTwoFactorForRequest(user, code)
+  if (!twoFactor.ok) {
+    return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
   }
 
   const parsed = addBankAccountSchema.safeParse(body)

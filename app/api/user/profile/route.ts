@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
-import speakeasy from 'speakeasy'
-import { decrypt } from '@/lib/crypto'
+import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { logger } from '@/lib/logger'
 
 export async function GET(request: NextRequest) {
@@ -49,22 +48,10 @@ export async function PUT(request: NextRequest) {
       where: { privyId: claims.userId },
     })
 
-    // 2FA Check for updates
-    if (user?.twoFactorEnabled) {
-      if (!code) {
-        return NextResponse.json({ error: '2FA code required' }, { status: 401 })
-      }
-      if (user.twoFactorSecret) {
-        const secret = decrypt(user.twoFactorSecret)
-        const verified = speakeasy.totp.verify({
-          secret: secret,
-          encoding: 'base32',
-          token: code,
-          window: 1
-        })
-        if (!verified) {
-          return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
-        }
+    if (user) {
+      const twoFactor = verifyTwoFactorForRequest(user, code)
+      if (!twoFactor.ok) {
+        return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
       }
     }
 

@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
-import speakeasy from 'speakeasy'
-import { decrypt } from '@/lib/crypto'
+import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { nanoid } from 'nanoid'
 
 import { initiateOfframp } from '@/lib/offramp'
@@ -65,22 +64,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
   }
 
-  if (user.twoFactorEnabled) {
-    if (!code) {
-      return NextResponse.json({ error: '2FA code required' }, { status: 401 })
-    }
-    if (user.twoFactorSecret) {
-      const secret = decrypt(user.twoFactorSecret)
-      const verified = speakeasy.totp.verify({
-        secret,
-        encoding: 'base32',
-        token: code,
-        window: 1,
-      })
-      if (!verified) {
-        return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
-      }
-    }
+  const twoFactor = verifyTwoFactorForRequest(user, code)
+  if (!twoFactor.ok) {
+    return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
   }
 
   const bankAccount = await prisma.bankAccount.findFirst({
@@ -105,7 +91,6 @@ export async function POST(request: NextRequest) {
 
   const reference = `wd_${nanoid(10)}`
 
-  // 1. Deduct USDC from Stellar wallet before calling the API
   try {
     await deductStellarUSDC(user.wallet.address, amount, reference)
   } catch (error: any) {
@@ -127,7 +112,6 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error: any) {
-    // If offramp fails, we should ideally refund the Stellar deduction or log for resolution
     console.error('Off-ramp initiation failed:', error)
     return NextResponse.json(
       { error: error.message || 'Withdrawal provider error' },
