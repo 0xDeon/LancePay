@@ -2,16 +2,19 @@ import { z } from 'zod'
 
 export const createInvoiceSchema = z.object({
   clientEmail: z.string().email(),
-  clientName: z.string().optional(),
+  clientName: z.string().nullish(),
   description: z.string().min(1).max(500),
-  amount: z.number().positive().max(100000),
-  currency: z.string().optional().default('USD'),
-  dueDate: z.string().optional(),
+  amount: z.number().finite().positive().max(100000),
+  currency: z.string().regex(/^[A-Z]{3,5}$/, 'Invalid currency code').optional().default('USD'),
+  dueDate: z
+    .string()
+    .optional()
+    .refine((val) => !val || !isNaN(new Date(val).getTime()), 'Invalid date format'),
 })
 
 export const addBankAccountSchema = z.object({
-  bankCode: z.string().length(3),
-  accountNumber: z.string().length(10),
+  bankCode: z.string().regex(/^\d{3}$/, 'Bank code must be 3 digits'),
+  accountNumber: z.string().regex(/^\d{10}$/, 'Account number must be 10 digits'),
 })
 
 export const createApiKeySchema = z.object({
