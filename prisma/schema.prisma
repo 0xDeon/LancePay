@@ -102,6 +102,8 @@ model User {
   invoiceTemplates        InvoiceTemplate[]
   portalSessionsIssued    ClientPortalSession[] @relation("PortalSessionOwner")
   portalSessionsAsClient  ClientPortalSession[] @relation("PortalSessionClient")
+  emergencyRecoveryRequests  EmergencyRecoveryRequest[]  @relation("EmergencyRecoveryRequester")
+  emergencyRecoveryApprovals EmergencyRecoveryApproval[]
 }
 
 model KycApplication {
@@ -928,9 +930,9 @@ model CollectiveWallet {
   threshold          Int      @default(2)
   createdAt          DateTime @default(now())
 
-  signers            WalletSigner[]
-  proposals          MultisigProposal[]
-  emergencyRecoveries EmergencyRecovery[]
+  signers   WalletSigner[]
+  proposals MultisigProposal[]
+  emergencyRecoveryRequests EmergencyRecoveryRequest[]
 
   @@index([stellarAddress])
 }
@@ -1298,6 +1300,43 @@ model RecoveryPhoneVerification {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+/// A request to replace or recover access to a CollectiveWallet's signers,
+/// gated behind multi-party admin approval.
+/// status: "pending" | "executing" | "executed" | "rejected"
+model EmergencyRecoveryRequest {
+  id                String    @id @default(uuid())
+  walletId          String
+  requestedById     String
+  reason            String?   @db.Text
+  requiredApprovals Int       @default(2)
+  status            String    @default("pending") @db.VarChar(20)
+  executedAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  wallet      CollectiveWallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  requestedBy User                        @relation("EmergencyRecoveryRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  approvals   EmergencyRecoveryApproval[]
+
+  @@index([walletId])
+  @@index([requestedById])
+  @@index([status])
+}
+
+model EmergencyRecoveryApproval {
+  id        String   @id @default(uuid())
+  requestId String
+  adminId   String
+  decision  String   @db.VarChar(20) // "approved" | "rejected"
+  createdAt DateTime @default(now())
+
+  request EmergencyRecoveryRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  admin   User                     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, adminId])
+  @@index([requestId])
+  @@index([adminId])
 }
 
 model Snippet {
