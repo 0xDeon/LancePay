@@ -4,6 +4,7 @@ import { verifyAuthToken } from '@/lib/auth'
 import speakeasy from 'speakeasy'
 import { decrypt } from '@/lib/crypto'
 import { nanoid } from 'nanoid'
+import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 
 import { initiateOfframp } from '@/lib/offramp'
 import { debitDelegatedUSDC } from '@/lib/stellar'
@@ -75,6 +76,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (user.twoFactorEnabled) {
+    const rateLimitResult = twoFactorLimiter.check(user.id)
+    if (!rateLimitResult.allowed) {
+      return buildRateLimitResponse(rateLimitResult)
+    }
     if (!code) {
       return NextResponse.json({ error: '2FA code required' }, { status: 401 })
     }
@@ -160,6 +165,19 @@ export async function POST(request: NextRequest) {
       bankAccountId,
       externalId: offrampResponse.transactionId,
       txHash: deductionTxHash,
+    },
+  })
+
+  // Create WithdrawalTransaction record for webhook tracking
+  await prisma.withdrawalTransaction.create({
+    data: {
+      userId: user.id,
+      anchorId: 'yellowcard',
+      stellarTxId: offrampResponse.transactionId,
+      amount,
+      asset: 'USDC',
+      status: 'pending',
+      withdrawType: 'bank_transfer',
     },
   })
 
