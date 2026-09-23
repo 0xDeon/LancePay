@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
 import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { nanoid } from 'nanoid'
+import { reserveWithdrawalInTransaction } from '@/lib/withdrawal-ledger'
 
 import { initiateOfframp } from '@/lib/offramp'
 
@@ -85,11 +86,34 @@ export async function POST(request: NextRequest) {
   const usdcBalanceObj = (balances as any[]).find((b: any) => b.asset_code === 'USDC')
   const currentBalance = usdcBalanceObj ? parseFloat(usdcBalanceObj.balance) : 0
 
-  if (currentBalance < amount) {
+  const reference = `wd_${nanoid(10)}`
+
+  const transaction = await prisma.$transaction(async (tx) => {
+    const reserved = await reserveWithdrawalInTransaction(
+      tx,
+      user.id,
+      amount,
+      currentBalance,
+    )
+    if (!reserved) {
+      return null
+    }
+
+    return tx.transaction.create({
+      data: {
+        userId: user.id,
+        type: 'withdrawal',
+        status: 'pending',
+        amount,
+        currency: 'USDC',
+        bankAccountId,
+      },
+    })
+  })
+
+  if (!transaction) {
     return NextResponse.json({ error: 'Insufficient balance' }, { status: 400 })
   }
-
-  const reference = `wd_${nanoid(10)}`
 
   try {
     await deductStellarUSDC(user.wallet.address, amount, reference)
@@ -119,16 +143,9 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const transaction = await prisma.transaction.create({
-    data: {
-      userId: user.id,
-      type: 'withdrawal',
-      status: 'pending',
-      amount,
-      currency: 'USDC',
-      bankAccountId,
-      externalId: offrampResponse.transactionId,
-    },
+  await prisma.transaction.update({
+    where: { id: transaction.id },
+    data: { externalId: offrampResponse.transactionId },
   })
 
   return NextResponse.json(
