@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
-import speakeasy from 'speakeasy'
-import { decrypt } from '@/lib/crypto'
+import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { logger } from '@/lib/logger'
 import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 

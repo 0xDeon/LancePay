@@ -131,6 +131,18 @@ describe('Withdrawal API', () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue(mockUser as any)
     vi.mocked(getAccountBalance).mockResolvedValue([{ asset_code: 'USDC', balance: '10.0' }] as any)
     vi.mocked(prisma.bankAccount.findFirst).mockResolvedValue({ id: 'bank-1' } as any)
+    vi.mocked(prisma.$transaction).mockImplementation(async (fn) => {
+      const tx = {
+        userWithdrawalBalance: {
+          upsert: vi.fn().mockResolvedValue({}),
+          findUnique: vi.fn().mockResolvedValue({ userId: 'user-2', availableUsdc: 10 }),
+          update: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        transaction: { create: vi.fn() },
+      }
+      return fn(tx as never)
+    })
 
     const res = await POST(makeRequest({ amount: 50, bankAccountId: 'bank-1' }))
     const json = await res.json()
@@ -188,7 +200,7 @@ describe('Withdrawal API', () => {
     expect(json.error).toBe('Invalid amount')
     expect(prisma.bankAccount.findFirst).not.toHaveBeenCalled()
     expect(initiateOfframp).not.toHaveBeenCalled()
-    expect(prisma.transaction.create).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
   })
 
   it('returns 401 when 2FA code is missing but required', async () => {
