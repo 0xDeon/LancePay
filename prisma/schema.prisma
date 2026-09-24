@@ -128,23 +128,26 @@ model KycApplication {
 }
 
 model KycDocument {
-  id           String   @id @default(uuid())
-  userId       String
-  documentType String   @db.VarChar(40)
-  status       String   @default("uploaded") @db.VarChar(20)
-  fileUrl      String   @db.VarChar(512)
-  fileName     String?  @db.VarChar(200)
-  fileSize     Int?
-  mimeType     String?  @db.VarChar(80)
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String    @id @default(uuid())
+  userId        String
+  documentType  String    @db.VarChar(40)
+  status        String    @default("uploaded") @db.VarChar(20)
+  fileUrl       String    @db.VarChar(512)
+  fileName      String?   @db.VarChar(200)
+  fileSize      Int?
+  mimeType      String?   @db.VarChar(80)
+  notes         String?   @db.Text
+  ocrConfidence Decimal?  @db.Decimal(5, 4)
+  ocrReviewedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
   @@index([documentType])
+  @@index([ocrConfidence, ocrReviewedAt])
 }
 
 model SourceOfFundsDeclaration {
