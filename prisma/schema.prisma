@@ -100,6 +100,7 @@ model User {
   emergencyRecoveryRequests  EmergencyRecoveryRequest[]  @relation("EmergencyRecoveryRequester")
   emergencyRecoveryApprovals EmergencyRecoveryApproval[]
   ledgerDriftFindings         LedgerDriftFinding[]
+  driftCorrectionProposals   LedgerDriftCorrectionProposal[] @relation("DriftCorrectionProposer")
 }
 
 model KycApplication {
@@ -202,9 +203,29 @@ model LedgerDriftFinding {
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  correctionProposals LedgerDriftCorrectionProposal[]
 
   @@index([userId, currency])
   @@index([status, detectedAt])
+}
+
+model LedgerDriftCorrectionProposal {
+  id             String   @id @default(uuid())
+  driftFindingId String
+  proposedById   String
+  amount         Decimal  @db.Decimal(18, 7)
+  currency       String   @db.VarChar(12)
+  reason         String   @db.Text
+  status         String   @default("pending") @db.VarChar(20)
+  createdAt      DateTime @default(now())
+  reviewedAt     DateTime?
+
+  driftFinding LedgerDriftFinding @relation(fields: [driftFindingId], references: [id], onDelete: Restrict)
+  proposedBy   User               @relation("DriftCorrectionProposer", fields: [proposedById], references: [id], onDelete: Restrict)
+
+  @@index([driftFindingId, status])
+  @@index([proposedById])
+  @@index([status, createdAt])
 }
 
 model BankAccount {
