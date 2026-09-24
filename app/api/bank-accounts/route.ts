@@ -5,6 +5,7 @@ import { verifyNigerianBankAccount } from '@/lib/bank-verification'
 import speakeasy from 'speakeasy'
 import { decrypt } from '@/lib/crypto'
 import { addBankAccountSchema } from '@/lib/validations'
+import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 
 const BANKS: Record<string, string> = {
   '044': 'Access Bank',
@@ -65,6 +66,10 @@ export async function POST(request: NextRequest) {
 
   // 2FA Check
   if (user.twoFactorEnabled) {
+    const rateLimitResult = twoFactorLimiter.check(user.id)
+    if (!rateLimitResult.allowed) {
+      return buildRateLimitResponse(rateLimitResult)
+    }
     if (!code) {
       return NextResponse.json({ error: '2FA code required' }, { status: 401 })
     }
