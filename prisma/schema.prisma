@@ -106,6 +106,8 @@ model User {
   portalSessionsAsClient  ClientPortalSession[] @relation("PortalSessionClient")
   emergencyRecoveryRequests  EmergencyRecoveryRequest[]  @relation("EmergencyRecoveryRequester")
   emergencyRecoveryApprovals EmergencyRecoveryApproval[]
+  ledgerDriftFindings         LedgerDriftFinding[]
+  driftCorrectionProposals   LedgerDriftCorrectionProposal[] @relation("DriftCorrectionProposer")
 }
 
 model KycApplication {
@@ -189,7 +191,48 @@ model Wallet {
   address   String   @unique
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user          User                 @relation(fields: [userId], references: [id])
+  driftFindings LedgerDriftFinding[]
+}
+
+model LedgerDriftFinding {
+  id             String    @id @default(uuid())
+  userId         String
+  walletId       String
+  currency       String    @default("USDC") @db.VarChar(12)
+  ledgerBalance  Decimal   @db.Decimal(18, 7)
+  onChainBalance Decimal   @db.Decimal(18, 7)
+  driftAmount    Decimal   @db.Decimal(18, 7)
+  tolerance      Decimal   @db.Decimal(18, 7)
+  status         String    @default("open") @db.VarChar(20)
+  detectedAt     DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  correctionProposals LedgerDriftCorrectionProposal[]
+
+  @@index([userId, currency])
+  @@index([status, detectedAt])
+}
+
+model LedgerDriftCorrectionProposal {
+  id             String   @id @default(uuid())
+  driftFindingId String
+  proposedById   String
+  amount         Decimal  @db.Decimal(18, 7)
+  currency       String   @db.VarChar(12)
+  reason         String   @db.Text
+  status         String   @default("pending") @db.VarChar(20)
+  createdAt      DateTime @default(now())
+  reviewedAt     DateTime?
+
+  driftFinding LedgerDriftFinding @relation(fields: [driftFindingId], references: [id], onDelete: Restrict)
+  proposedBy   User               @relation("DriftCorrectionProposer", fields: [proposedById], references: [id], onDelete: Restrict)
+
+  @@index([driftFindingId, status])
+  @@index([proposedById])
+  @@index([status, createdAt])
 }
 
 model BankAccount {
@@ -426,6 +469,9 @@ model Transaction {
   error             String?
   externalId        String?   @unique
   virtualAccountId  String?
+  reconciliationStatus      String    @default("pending") @db.VarChar(20)
+  reconciliationReason      String?   @db.VarChar(30)
+  reconciliationAttemptedAt DateTime?
 
   user           User            @relation(fields: [userId], references: [id])
   invoice        Invoice?        @relation(fields: [invoiceId], references: [id])
@@ -435,6 +481,7 @@ model Transaction {
   @@index([status])
   @@index([type])
   @@index([bankAccountId])
+  @@index([reconciliationStatus, reconciliationAttemptedAt])
 }
 
 model ReferralEarning {
@@ -1828,4 +1875,19 @@ model InvoiceTemplate {
 
   @@unique([userId, name])
   @@index([userId])
+}
+
+model DistributedJobLock {
+  id                  String    @id @default(uuid())
+  name                String    @unique @db.VarChar(191)
+  tokenHash           String?   @db.VarChar(64)
+  previousTokenHashes String[]  @default([])
+  holderId            String?   @db.VarChar(191)
+  acquiredAt          DateTime?
+  expiresAt           DateTime?
+  releasedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([expiresAt])
 }
