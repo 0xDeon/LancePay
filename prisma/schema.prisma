@@ -1584,12 +1584,14 @@ model WhitelistAddress {
   address   String   @db.VarChar(70)
   network   String   @default("stellar") @db.VarChar(20) // "stellar" | "bank"
   createdAt DateTime @default(now())
+  activatesAt DateTime // Timestamp when this address becomes usable for withdrawals (after cooldown period)
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, address])
   @@index([userId])
+  @@index([activatesAt])
 }
 
 model BalanceThresholdAlert {

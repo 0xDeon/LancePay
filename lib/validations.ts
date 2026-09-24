@@ -54,8 +54,15 @@ export const createSubscriptionSchema = z.object({
   startDate: z.string().optional(),
 })
 
+export const createWhitelistAddressSchema = z.object({
+  label: z.string().min(1, 'Label is required').max(100, 'Label must be less than 100 characters'),
+  address: z.string().min(1, 'Address is required').max(70, 'Address is too long'),
+  network: z.enum(['stellar', 'bank'], { errorMap: () => ({ message: 'Network must be "stellar" or "bank"' }) }),
+})
+
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>
 export type AddBankAccountInput = z.infer<typeof addBankAccountSchema>
 export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>
 export type ExternalInvoiceInput = z.infer<typeof externalInvoiceSchema>
 export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>
+export type CreateWhitelistAddressInput = z.infer<typeof createWhitelistAddressSchema>
