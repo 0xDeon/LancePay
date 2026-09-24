@@ -51,6 +51,8 @@ model User {
   auditEvents            AuditEvent[]
   savingsGoals           SavingsGoal[]
   incomeVerifications    IncomeVerification[]
+  sanctionsAppeals       SanctionsAppeal[]
+  watchlistRemovals      SecurityWatchlistRemovalAudit[]
   payoutBatches          PayoutBatch[]
   manualPayments         ManualPayment[]       @relation("ManualPaymentVerifier")
   collaborations         InvoiceCollaborator[] @relation("SubContractorCollaborations")
@@ -794,6 +796,24 @@ model SecurityWatchlist {
   @@index([value])
 }
 
+model SecurityWatchlistRemovalAudit {
+  id             String   @id @default(uuid())
+  watchlistId    String
+  type           String   @db.VarChar(20)
+  value          String   @db.VarChar(255)
+  additionReason String   @db.Text
+  removalReason  String   @db.Text
+  removedById    String
+  removedAt      DateTime @default(now())
+
+  removedBy User @relation(fields: [removedById], references: [id], onDelete: Restrict)
+
+  @@index([watchlistId])
+  @@index([value])
+  @@index([removedById])
+  @@index([removedAt])
+}
+
 model InvoiceCollaborator {
   id              String    @id @default(uuid())
   invoiceId       String
@@ -1243,10 +1263,28 @@ model SanctionsScreening {
   updatedAt   DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appeals SanctionsAppeal[]
 
   @@index([userId])
   @@index([status])
   @@index([screenedAt])
+}
+
+model SanctionsAppeal {
+  id          String   @id @default(uuid())
+  screeningId String
+  userId      String
+  reason      String   @db.Text
+  status      String   @default("pending") @db.VarChar(20)
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+
+  screening SanctionsScreening @relation(fields: [screeningId], references: [id], onDelete: Cascade)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([screeningId])
+  @@index([userId])
+  @@index([status])
 }
 
 model ClientNote {
