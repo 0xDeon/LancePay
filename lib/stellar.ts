@@ -48,7 +48,8 @@ export interface AccountBalance {
 export type StellarError =
   | { type: "invalid_address"; message: string }
   | { type: "network_error"; message: string }
-  | { type: "payment_failed"; message: string };
+  | { type: "payment_failed"; message: string }
+  | { type: "insufficient_funds"; message: string };
 
 /**
  * Type definition for Stellar SDK error responses
@@ -216,6 +217,93 @@ export async function sendUSDCPayment(
     }
 
     throw { type: "payment_failed", message } as StellarError;
+  }
+}
+
+/**
+ * Debit USDC from a user's self-custody wallet using the platform's
+ * delegated signer, and forward it to the platform's treasury account.
+ *
+ * This is used for withdrawals: LancePay never holds the user's own secret
+ * key, so the delegated signer must be registered as an additional signer
+ * with sufficient weight on the user's Stellar account (set up during wallet
+ * provisioning) in order to co-sign payments out of it. The transaction's
+ * source account is the user's wallet, so Horizon enforces the real on-chain
+ * balance when the transaction is submitted: an underfunded account fails
+ * the submission outright (op_underfunded). That is what makes this debit
+ * atomic with the balance check - two concurrent debits against the same
+ * balance cannot both succeed, because Horizon only lets one of them post
+ * before the account is underfunded for the other.
+ *
+ * @param delegateSecretKey Platform delegated signer's secret key
+ * @param fromPublicKey User's wallet public key (transaction source)
+ * @param toPublicKey Treasury/receiver public key
+ * @param amount Amount of USDC to debit (string)
+ * @param memo Optional transaction memo (truncated to 28 bytes)
+ * @returns transaction hash
+ * @throws StellarError with type "insufficient_funds" on an underfunded account
+ */
+export async function debitDelegatedUSDC(
+  delegateSecretKey: string,
+  fromPublicKey: string,
+  toPublicKey: string,
+  amount: string,
+  memo?: string,
+): Promise<string> {
+  if (!isValidStellarAddress(fromPublicKey) || !isValidStellarAddress(toPublicKey)) {
+    throw {
+      type: "invalid_address",
+      message: "Invalid Stellar address.",
+    } as StellarError;
+  }
+
+  try {
+    const delegateKeypair = Keypair.fromSecret(delegateSecretKey);
+    const account = await server.loadAccount(fromPublicKey);
+
+    const builder = new TransactionBuilder(account, {
+      fee: (await server.fetchBaseFee()).toString(),
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(
+        Operation.payment({
+          destination: toPublicKey,
+          asset: USDC_ASSET,
+          amount,
+        }),
+      )
+      .setTimeout(30);
+
+    const safeMemo = sanitizeStellarTextMemo(memo);
+    if (safeMemo) {
+      builder.addMemo(Memo.text(safeMemo));
+    }
+
+    const transaction = builder.build();
+
+    // Signed by the delegated signer, not the user - see doc comment above.
+    transaction.sign(delegateKeypair);
+
+    const txResult = await server.submitTransaction(transaction);
+    return txResult.hash;
+  } catch (err: unknown) {
+    console.error("Error debiting delegated USDC withdrawal:", err);
+
+    const stellarError = err as StellarErrorResponse;
+    const opsMessage =
+      stellarError?.response?.data?.extras?.result_codes?.operations?.[0];
+
+    if (opsMessage === "op_underfunded") {
+      throw {
+        type: "insufficient_funds",
+        message: "Wallet does not have enough USDC to cover this withdrawal.",
+      } as StellarError;
+    }
+
+    throw {
+      type: "payment_failed",
+      message: opsMessage || "Failed to debit withdrawal from Stellar wallet.",
+    } as StellarError;
   }
 }
 
@@ -873,3 +961,121 @@ export async function sendPathPayment(
 }
 
 export const sendStellarPayment = sendUSDCPayment;
+
+/**
+ * Result codes extracted from a Horizon submission error, following the same
+ * shape used in lib/stellar-funding.ts.
+ */
+function extractResultCodes(e: unknown): {
+  tx?: string;
+  ops?: string[];
+  status?: number;
+} {
+  const err = e as StellarErrorResponse & {
+    response?: { status?: number };
+  };
+  return {
+    status: err?.response?.status,
+    tx: err?.response?.data?.extras?.result_codes?.transaction,
+    ops: err?.response?.data?.extras?.result_codes?.operations,
+  };
+}
+
+/**
+ * Whether a Horizon submission error is a sequence-number collision that is
+ * safe to retry against a freshly loaded account sequence.
+ */
+function isSequenceCollisionError(e: unknown): boolean {
+  return extractResultCodes(e).tx === "tx_bad_seq";
+}
+
+export const MULTISIG_BROADCAST_MAX_SEQUENCE_RETRIES = 3;
+
+/**
+ * Submit an already-approved multisig USDC payment, retrying with a freshly
+ * loaded account sequence when Horizon reports a sequence-number collision
+ * (tx_bad_seq) - e.g. another transaction from the same source account
+ * landed between building and submitting this one.
+ *
+ * Retries are capped at MULTISIG_BROADCAST_MAX_SEQUENCE_RETRIES so sustained
+ * contention fails loudly instead of looping forever.
+ *
+ * @throws StellarError on invalid destination or after retries are exhausted
+ */
+export async function submitMultisigPaymentWithRetry(
+  sourceSecretKey: string,
+  destinationAddress: string,
+  amount: string,
+  memo?: string,
+  maxRetries: number = MULTISIG_BROADCAST_MAX_SEQUENCE_RETRIES,
+): Promise<string> {
+  if (!isValidStellarAddress(destinationAddress)) {
+    throw {
+      type: "invalid_address",
+      message: "Invalid destination Stellar address.",
+    } as StellarError;
+  }
+
+  const sourceKeypair = Keypair.fromSecret(sourceSecretKey);
+  const safeMemo = sanitizeStellarTextMemo(memo);
+
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      // Reload the account on every attempt so a retry always builds against
+      // the current on-chain sequence number rather than a stale one.
+      const account = await server.loadAccount(sourceKeypair.publicKey());
+
+      const builder = new TransactionBuilder(account, {
+        fee: (await server.fetchBaseFee()).toString(),
+        networkPassphrase: STELLAR_NETWORK,
+      })
+        .addOperation(
+          Operation.payment({
+            destination: destinationAddress,
+            asset: USDC_ASSET,
+            amount,
+          }),
+        )
+        .setTimeout(30);
+
+      if (safeMemo) {
+        builder.addMemo(Memo.text(safeMemo));
+      }
+
+      const transaction = builder.build();
+      transaction.sign(sourceKeypair);
+
+      const txResult = await server.submitTransaction(transaction);
+      return txResult.hash;
+    } catch (err: unknown) {
+      lastError = err;
+
+      if (attempt < maxRetries && isSequenceCollisionError(err)) {
+        console.warn("Multisig broadcast sequence collision, retrying", {
+          attempt,
+          maxRetries,
+        });
+        continue;
+      }
+
+      break;
+    }
+  }
+
+  console.error("Error broadcasting multisig payment:", lastError);
+
+  let message = "Failed to broadcast multisig payment.";
+  if (lastError && typeof lastError === "object") {
+    const opsMessage = extractResultCodes(lastError).ops?.[0];
+    if (opsMessage) {
+      message = opsMessage;
+    } else if (isSequenceCollisionError(lastError)) {
+      message =
+        "Sequence-number collision persisted after retrying; try broadcasting again.";
+    }
+  }
+
+  throw { type: "payment_failed", message } as StellarError;
+}

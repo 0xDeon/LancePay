@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
 import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { logger } from '@/lib/logger'
+import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 
 export async function GET(request: NextRequest) {
   try {
@@ -48,10 +49,26 @@ export async function PUT(request: NextRequest) {
       where: { privyId: claims.userId },
     })
 
-    if (user) {
-      const twoFactor = verifyTwoFactorForRequest(user, code)
-      if (!twoFactor.ok) {
-        return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
+    // 2FA Check for updates
+    if (user?.twoFactorEnabled) {
+      const rateLimitResult = twoFactorLimiter.check(user.id)
+      if (!rateLimitResult.allowed) {
+        return buildRateLimitResponse(rateLimitResult)
+      }
+      if (!code) {
+        return NextResponse.json({ error: '2FA code required' }, { status: 401 })
+      }
+      if (user.twoFactorSecret) {
+        const secret = decrypt(user.twoFactorSecret)
+        const verified = speakeasy.totp.verify({
+          secret: secret,
+          encoding: 'base32',
+          token: code,
+          window: 1
+        })
+        if (!verified) {
+          return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
+        }
       }
     }
 

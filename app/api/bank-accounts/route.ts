@@ -4,6 +4,7 @@ import { verifyAuthToken } from '@/lib/auth'
 import { verifyNigerianBankAccount } from '@/lib/bank-verification'
 import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { addBankAccountSchema } from '@/lib/validations'
+import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 
 const BANKS: Record<string, string> = {
   '044': 'Access Bank',
@@ -62,9 +63,27 @@ export async function POST(request: NextRequest) {
   const rawCode = (body as { code?: unknown } | null)?.code
   const code = typeof rawCode === 'string' || typeof rawCode === 'number' ? String(rawCode) : undefined
 
-  const twoFactor = verifyTwoFactorForRequest(user, code)
-  if (!twoFactor.ok) {
-    return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
+  // 2FA Check
+  if (user.twoFactorEnabled) {
+    const rateLimitResult = twoFactorLimiter.check(user.id)
+    if (!rateLimitResult.allowed) {
+      return buildRateLimitResponse(rateLimitResult)
+    }
+    if (!code) {
+      return NextResponse.json({ error: '2FA code required' }, { status: 401 })
+    }
+    if (user.twoFactorSecret) {
+      const secret = decrypt(user.twoFactorSecret)
+      const verified = speakeasy.totp.verify({
+        secret: secret,
+        encoding: 'base32',
+        token: code,
+        window: 1
+      })
+      if (!verified) {
+        return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
+      }
+    }
   }
 
   const parsed = addBankAccountSchema.safeParse(body)

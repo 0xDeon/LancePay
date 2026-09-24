@@ -3,23 +3,32 @@ import { prisma } from '@/lib/db'
 import { verifyAuthToken } from '@/lib/auth'
 import { verifyTwoFactorForRequest } from '@/lib/two-factor'
 import { nanoid } from 'nanoid'
-import { reserveWithdrawalInTransaction } from '@/lib/withdrawal-ledger'
+import { twoFactorLimiter, buildRateLimitResponse } from '@/lib/rate-limit'
 
 import { initiateOfframp } from '@/lib/offramp'
+import { debitDelegatedUSDC } from '@/lib/stellar'
 
-// In a real production scenario, the backend would need a way to sign the Stellar transaction.
-// This could be via a treasury/escrow wallet that has authorization to "pull" funds,
-// or by having the frontend pass a signed transaction XDR. 
-// For now, we will add a placeholder for this deduction logic as per requirements.
+// Debits USDC from the user's self-custody Stellar wallet using the
+// platform's delegated signer and forwards it to the treasury account. See
+// the doc comment on debitDelegatedUSDC in lib/stellar.ts: Horizon enforces
+// the real on-chain balance at submission time, which is what makes this
+// debit atomic with the balance check above - two concurrent withdrawals
+// against the same balance cannot both succeed.
 async function deductStellarUSDC(userAddress: string, amount: number, reference: string) {
-  // TODO: Implement actual Stellar transaction logic.
-  // This requires the sender's secret key or a pre-authorized delegation.
-  console.log(`Deducting ${amount} USDC from ${userAddress} for ${reference}`)
-  
-  // Example of what a real call might look like if we had the keys:
-  // await sendUSDCPayment(userAddress, userSecretKey, LANCEPAY_RECEIVER_ADDRESS, amount.toString(), reference)
-  
-  return { success: true, txHash: 'stub_tx_hash' }
+  const delegateSecretKey = process.env.WITHDRAWAL_DELEGATE_SECRET_KEY
+  const treasuryAddress = process.env.TREASURY_WALLET_ADDRESS
+  if (!delegateSecretKey || !treasuryAddress) {
+    throw new Error('Withdrawal delegate signer is not configured')
+  }
+
+  const txHash = await debitDelegatedUSDC(
+    delegateSecretKey,
+    userAddress,
+    treasuryAddress,
+    amount.toString(),
+    reference,
+  )
+  return { success: true, txHash }
 }
 
 export async function GET(request: NextRequest) {
@@ -65,9 +74,26 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid amount' }, { status: 400 })
   }
 
-  const twoFactor = verifyTwoFactorForRequest(user, code)
-  if (!twoFactor.ok) {
-    return NextResponse.json({ error: twoFactor.error }, { status: twoFactor.status })
+  if (user.twoFactorEnabled) {
+    const rateLimitResult = twoFactorLimiter.check(user.id)
+    if (!rateLimitResult.allowed) {
+      return buildRateLimitResponse(rateLimitResult)
+    }
+    if (!code) {
+      return NextResponse.json({ error: '2FA code required' }, { status: 401 })
+    }
+    if (user.twoFactorSecret) {
+      const secret = decrypt(user.twoFactorSecret)
+      const verified = speakeasy.totp.verify({
+        secret,
+        encoding: 'base32',
+        token: code,
+        window: 1,
+      })
+      if (!verified) {
+        return NextResponse.json({ error: 'Invalid 2FA code' }, { status: 401 })
+      }
+    }
   }
 
   const bankAccount = await prisma.bankAccount.findFirst({
@@ -115,12 +141,21 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Insufficient balance' }, { status: 400 })
   }
 
+  const reference = `wd_${nanoid(10)}`
+
+  // 1. Deduct USDC from the Stellar wallet before calling the off-ramp API.
+  // debitDelegatedUSDC submits a real on-chain payment, so Horizon rejects
+  // this outright if the wallet is actually underfunded - the off-ramp is
+  // never reached unless the debit genuinely succeeded.
+  let deductionTxHash: string
   try {
-    await deductStellarUSDC(user.wallet.address, amount, reference)
+    const deduction = await deductStellarUSDC(user.wallet.address, amount, reference)
+    deductionTxHash = deduction.txHash
   } catch (error: any) {
+    const status = error?.type === 'insufficient_funds' ? 400 : 502
     return NextResponse.json(
       { error: error.message || 'Failed to deduct funds from Stellar wallet' },
-      { status: 400 },
+      { status },
     )
   }
 
@@ -143,9 +178,30 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  await prisma.transaction.update({
-    where: { id: transaction.id },
-    data: { externalId: offrampResponse.transactionId },
+  const transaction = await prisma.transaction.create({
+    data: {
+      userId: user.id,
+      type: 'withdrawal',
+      status: 'pending',
+      amount,
+      currency: 'USDC',
+      bankAccountId,
+      externalId: offrampResponse.transactionId,
+      txHash: deductionTxHash,
+    },
+  })
+
+  // Create WithdrawalTransaction record for webhook tracking
+  await prisma.withdrawalTransaction.create({
+    data: {
+      userId: user.id,
+      anchorId: 'yellowcard',
+      stellarTxId: offrampResponse.transactionId,
+      amount,
+      asset: 'USDC',
+      status: 'pending',
+      withdrawType: 'bank_transfer',
+    },
   })
 
   return NextResponse.json(
