@@ -462,6 +462,9 @@ model Transaction {
   error             String?
   externalId        String?   @unique
   virtualAccountId  String?
+  reconciliationStatus      String    @default("pending") @db.VarChar(20)
+  reconciliationReason      String?   @db.VarChar(30)
+  reconciliationAttemptedAt DateTime?
 
   user           User            @relation(fields: [userId], references: [id])
   invoice        Invoice?        @relation(fields: [invoiceId], references: [id])
@@ -471,6 +474,7 @@ model Transaction {
   @@index([status])
   @@index([type])
   @@index([bankAccountId])
+  @@index([reconciliationStatus, reconciliationAttemptedAt])
 }
 
 model ReferralEarning {
