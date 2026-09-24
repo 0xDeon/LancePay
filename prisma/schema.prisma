@@ -1653,3 +1653,18 @@ model InvoiceTemplate {
   @@unique([userId, name])
   @@index([userId])
 }
+
+model DistributedJobLock {
+  id                  String    @id @default(uuid())
+  name                String    @unique @db.VarChar(191)
+  tokenHash           String?   @db.VarChar(64)
+  previousTokenHashes String[]  @default([])
+  holderId            String?   @db.VarChar(191)
+  acquiredAt          DateTime?
+  expiresAt           DateTime?
+  releasedAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([expiresAt])
+}
