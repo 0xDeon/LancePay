@@ -99,6 +99,7 @@ model User {
   portalSessionsAsClient  ClientPortalSession[] @relation("PortalSessionClient")
   emergencyRecoveryRequests  EmergencyRecoveryRequest[]  @relation("EmergencyRecoveryRequester")
   emergencyRecoveryApprovals EmergencyRecoveryApproval[]
+  ledgerDriftFindings         LedgerDriftFinding[]
 }
 
 model KycApplication {
@@ -182,7 +183,28 @@ model Wallet {
   address   String   @unique
   createdAt DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user          User                 @relation(fields: [userId], references: [id])
+  driftFindings LedgerDriftFinding[]
+}
+
+model LedgerDriftFinding {
+  id             String    @id @default(uuid())
+  userId         String
+  walletId       String
+  currency       String    @default("USDC") @db.VarChar(12)
+  ledgerBalance  Decimal   @db.Decimal(18, 7)
+  onChainBalance Decimal   @db.Decimal(18, 7)
+  driftAmount    Decimal   @db.Decimal(18, 7)
+  tolerance      Decimal   @db.Decimal(18, 7)
+  status         String    @default("open") @db.VarChar(20)
+  detectedAt     DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([userId, currency])
+  @@index([status, detectedAt])
 }
 
 model BankAccount {
