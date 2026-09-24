@@ -93,6 +93,7 @@ model User {
   taxRates                TaxRate[]
   products                Product[]
   balanceThresholdAlerts  BalanceThresholdAlert[]
+  journalEntries          JournalEntry[]
   automations             Automation[]
   libraryAttachments      LibraryAttachment[]
   invoiceAttachments      InvoiceAttachment[]
@@ -136,23 +137,26 @@ model KycApplication {
 }
 
 model KycDocument {
-  id           String   @id @default(uuid())
-  userId       String
-  documentType String   @db.VarChar(40)
-  status       String   @default("uploaded") @db.VarChar(20)
-  fileUrl      String   @db.VarChar(512)
-  fileName     String?  @db.VarChar(200)
-  fileSize     Int?
-  mimeType     String?  @db.VarChar(80)
-  notes        String?  @db.Text
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String    @id @default(uuid())
+  userId        String
+  documentType  String    @db.VarChar(40)
+  status        String    @default("uploaded") @db.VarChar(20)
+  fileUrl       String    @db.VarChar(512)
+  fileName      String?   @db.VarChar(200)
+  fileSize      Int?
+  mimeType      String?   @db.VarChar(80)
+  notes         String?   @db.Text
+  ocrConfidence Decimal?  @db.Decimal(5, 4)
+  ocrReviewedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
   @@index([documentType])
+  @@index([ocrConfidence, ocrReviewedAt])
 }
 
 model SourceOfFundsDeclaration {
@@ -484,6 +488,23 @@ model Transaction {
   @@index([reconciliationStatus, reconciliationAttemptedAt])
 }
 
+model JournalEntry {
+  id            String   @id @default(uuid())
+  userId        String
+  debitAccount  String   @db.VarChar(100)
+  creditAccount String   @db.VarChar(100)
+  amount        Decimal  @db.Decimal(18, 6)
+  currency      String   @db.VarChar(8)
+  description   String?  @db.Text
+  date          DateTime
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([currency])
+}
+
 model ReferralEarning {
   id             String   @id @default(uuid())
   referrerId     String
@@ -629,14 +650,19 @@ model EscrowEvent {
 }
 
 model BrandingSettings {
-  id           String   @id @default(uuid())
-  userId       String   @unique
-  logoUrl      String?
-  primaryColor String   @default("#000000")
-  footerText   String?
-  signatureUrl String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                     String    @id @default(uuid())
+  userId                 String    @unique
+  logoUrl                String?
+  primaryColor           String    @default("#000000")
+  footerText             String?
+  signatureUrl           String?
+  customDomain           String?   @unique @db.VarChar(253)
+  domainVerifiedAt       DateTime?
+  senderDomain           String    @default("lancepay.com") @db.VarChar(253)
+  domainRevokedAt        DateTime?
+  domainRevocationReason String?   @db.VarChar(500)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
